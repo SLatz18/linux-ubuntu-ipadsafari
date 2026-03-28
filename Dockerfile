@@ -30,7 +30,6 @@ RUN set -eux; \
     && chmod +x /usr/local/bin/ttyd
 
 # Run neofetch on every new terminal session to display system info
-# 'cd /root' ensures every session starts in the home directory
 # 'cc' alias drops into /workspace and launches claude in one keystroke
 RUN echo "neofetch || true" >> /root/.bashrc && \
     echo "cd /root" >> /root/.bashrc && \
@@ -303,8 +302,11 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/bin/bash", "-lc", "\
     echo \"export PS1='\\[\\033[01;31m\\]$USERNAME@\\h\\[\\033[00m\\]:\\[\\033[01;33m\\]\\w\\[\\033[00m\\]\\$ '\" >> /root/.bashrc && \
     mkdir -p /workspace/.claude && \
-    rm -rf ~/.claude && \
-    ln -s /workspace/.claude ~/.claude && \
+    rm -rf /root/.claude && \
+    ln -s /workspace/.claude /root/.claude && \
+    [ -s /workspace/.claude.json ] || echo '{}' > /workspace/.claude.json && \
+    rm -f /root/.claude.json && \
+    ln -s /workspace/.claude.json /root/.claude.json && \
     htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
     SESSION_SECRET=$(echo -n \"${USERNAME}:${PASSWORD}\" | sha256sum | cut -d' ' -f1) && \
     sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
