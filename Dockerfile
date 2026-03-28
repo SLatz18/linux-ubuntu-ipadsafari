@@ -530,6 +530,7 @@ CMD ["/bin/bash", "-lc", "\
     sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
     cat /etc/nginx/nginx.conf && \
     printf 'set-option -g status off\nset-option -g mouse on\n' > /root/.tmux.conf && \
+    tmux kill-session -t main 2>/dev/null || true && \
     /usr/local/bin/ttyd \
       --writable \
       -i 127.0.0.1 \
