@@ -493,7 +493,7 @@ CMD ["/bin/bash", "-lc", "\
     mkdir -p /workspace/.claude && \
     rm -rf /root/.claude && \
     ln -s /workspace/.claude /root/.claude && \
-    touch /workspace/.claude.json && \
+    [ -f /workspace/.claude.json ] || echo '{}' > /workspace/.claude.json && \
     rm -f /root/.claude.json && \
     ln -s /workspace/.claude.json /root/.claude.json && \
     htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
