@@ -529,6 +529,7 @@ CMD ["/bin/bash", "-lc", "\
     SESSION_SECRET=$(echo -n \"${USERNAME}:${PASSWORD}\" | sha256sum | cut -d' ' -f1) && \
     sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
     cat /etc/nginx/nginx.conf && \
+    printf 'set-option -g status off\nset-option -g mouse on\n' > /root/.tmux.conf && \
     /usr/local/bin/ttyd \
       --writable \
       -i 127.0.0.1 \
@@ -536,7 +537,7 @@ CMD ["/bin/bash", "-lc", "\
       -t disableLeaveAlert=true \
       -t fontSize=16 \
       -t cursorBlink=true \
-      tmux new-session -A -s main -x 220 -y 50 \; set-option -g status off & \
+      tmux new-session -A -s main & \
     sleep 1 && \
     nginx -t && \
     nginx -g 'daemon off;'"]
