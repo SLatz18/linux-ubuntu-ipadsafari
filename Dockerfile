@@ -13,7 +13,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates wget curl git \
     python3 python3-pip \
-    tini neofetch \
+    tini neofetch tmux \
     nginx apache2-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -212,8 +212,18 @@ RUN cat > /usr/share/nginx/html/voice.html << 'VOICEPAGE'
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100vh; height: -webkit-fill-available; background: #000; overflow: hidden; }
-#terminal { width: 100%; height: 100%; }
+/* Flex column so #terminal can flex-grow to fill remaining height reliably on iOS */
+html { height: 100%; }
+body {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #111;
+  overflow: hidden;
+}
+/* min-height: 0 is required so a flex child can shrink below its content size —
+   without it xterm.js canvas collapses to 0 height on iOS Safari */
+#terminal { flex: 1; min-height: 0; }
 #mic-btn {
   position: fixed; bottom: 24px; right: 24px;
   width: 64px; height: 64px; border-radius: 50%; border: none;
@@ -231,10 +241,10 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
 }
 #status {
   position: fixed; bottom: 96px; right: 16px;
-  background: rgba(0,0,0,0.75); color: #fff;
+  background: rgba(0,0,0,0.8); color: #fff;
   font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px;
   padding: 5px 12px; border-radius: 14px; z-index: 100;
-  max-width: 220px; text-align: right; display: none;
+  max-width: 240px; text-align: right; display: none;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 </style>
@@ -249,13 +259,16 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
   var term = new Terminal({
     fontSize: 16,
     cursorBlink: true,
-    theme: { background: '#000000', foreground: '#cccccc' },
+    /* Slightly off-black so users can see the terminal area against the page */
+    theme: { background: '#111111', foreground: '#cccccc' },
     convertEol: false
   });
   var fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(document.getElementById('terminal'));
-  fitAddon.fit();
+
+  /* Defer first fit until after layout is painted so xterm measures the real size */
+  requestAnimationFrame(function () { fitAddon.fit(); });
 
   var ro = new ResizeObserver(function () {
     fitAddon.fit();
@@ -263,7 +276,7 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
   });
   ro.observe(document.getElementById('terminal'));
 
-  /* ── WebSocket → ttyd ── */
+  /* ── WebSocket → ttyd (tmux session) ── */
   var ws;
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   var wsUrl = proto + '//' + location.host + '/ws';
@@ -275,9 +288,13 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
   }
 
   function connect() {
+    term.write('\x1b[33mConnecting to terminal\u2026\x1b[0m\r\n');
     ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
-    ws.onopen = function () { setTimeout(sendResize, 150); };
+    ws.onopen = function () {
+      term.write('\x1b[32mConnected.\x1b[0m\r\n');
+      setTimeout(sendResize, 150);
+    };
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string') {
         if (ev.data[0] === '0') term.write(ev.data.slice(1));
@@ -287,7 +304,7 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
       }
     };
     ws.onclose = function () {
-      term.write('\r\n\x1b[31m[Disconnected — reconnecting in 2 s…]\x1b[0m\r\n');
+      term.write('\r\n\x1b[31m[Disconnected \u2014 reconnecting in 2 s\u2026]\x1b[0m\r\n');
       setTimeout(connect, 2000);
     };
     ws.onerror = function () { ws.close(); };
@@ -299,7 +316,7 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
   });
 
   /* ── Voice input ── */
-  var micBtn  = document.getElementById('mic-btn');
+  var micBtn   = document.getElementById('mic-btn');
   var statusEl = document.getElementById('status');
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -308,8 +325,8 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
     micBtn.title = 'Speech recognition not supported in this browser';
     micBtn.disabled = true;
   } else {
-    var rec      = null;
-    var active   = false;
+    var rec    = null;
+    var active = false;
 
     function showStatus(txt) {
       statusEl.textContent = txt;
@@ -321,16 +338,16 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
 
     function startRec() {
       rec = new SR();
-      rec.lang             = 'en-US';
-      rec.interimResults   = true;
-      rec.maxAlternatives  = 1;
-      rec.continuous       = false;   /* iOS Safari works best with false */
+      rec.lang            = 'en-US';
+      rec.interimResults  = true;
+      rec.maxAlternatives = 1;
+      rec.continuous      = false; /* iOS Safari is most reliable with false */
 
       rec.onstart = function () {
         active = true;
         micBtn.classList.add('listening');
-        micBtn.innerHTML = '&#9632;'; /* stop square */
-        showStatus('Listening…');
+        micBtn.innerHTML = '&#9632;';
+        showStatus('Listening\u2026');
       };
 
       rec.onresult = function (e) {
@@ -347,7 +364,12 @@ html, body { height: 100vh; height: -webkit-fill-available; background: #000; ov
       };
 
       rec.onerror = function (e) {
-        showStatus('Error: ' + e.error);
+        /* 'network' is a transient iOS error — prompt user to retry rather than
+           showing a scary message */
+        var msg = e.error === 'network'
+          ? 'Tap again to retry'
+          : 'Error: ' + e.error;
+        showStatus(msg);
         stopRec();
       };
 
@@ -484,6 +506,13 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 # 5. Start ttyd bound to loopback only on port 7681 (nginx is the public-facing server)
 # 6. Start nginx in the foreground — tini keeps PID 1 tidy
 #
+# ttyd is started with tmux so every browser connection (/ and /voice) attaches
+# to the same shared session. Voice input typed via /voice appears in the same
+# terminal the user sees at /, and vice versa.
+# 'tmux new-session -A -s main' creates the session on first connect; subsequent
+# connections attach to the existing one (-A flag).
+# Status bar is hidden so tmux is invisible inside xterm.js / ttyd.
+#
 # ttyd client options (-t flags sent to the xterm.js frontend):
 #   disableLeaveAlert=true — stops Safari showing "Leave site?" on keyboard shortcuts
 #   fontSize=16            — readable without pinch-zooming on iPad
@@ -507,7 +536,7 @@ CMD ["/bin/bash", "-lc", "\
       -t disableLeaveAlert=true \
       -t fontSize=16 \
       -t cursorBlink=true \
-      /bin/bash -l & \
+      tmux new-session -A -s main -x 220 -y 50 \; set-option -g status off & \
     sleep 1 && \
     nginx -t && \
     nginx -g 'daemon off;'"]
