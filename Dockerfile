@@ -57,10 +57,6 @@ http {
         auth_basic "Terminal";
         auth_basic_user_file /etc/nginx/.htpasswd;
 
-        # Custom dark 401 page — Safari on iPad shows the page body behind the
-        # native auth dialog; this ensures it's dark instead of default grey/white.
-        error_page 401 @dark_auth;
-
         location / {
             proxy_pass http://127.0.0.1:7681;
 
@@ -78,14 +74,6 @@ http {
             # Long timeout so idle terminal sessions stay open
             proxy_read_timeout 7d;
             proxy_send_timeout 7d;
-        }
-
-        # Serves a dark HTML body with 401 status + WWW-Authenticate header so
-        # the browser still prompts for credentials but the background is black.
-        location @dark_auth {
-            add_header WWW-Authenticate 'Basic realm="Terminal"' always;
-            default_type text/html;
-            return 401 '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="background:#000;margin:0;min-height:100vh"></body></html>';
         }
     }
 }
