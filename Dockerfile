@@ -32,8 +32,9 @@ RUN echo "neofetch || true" >> /root/.bashrc && \
 
 # Custom login page — replaces the browser's native HTTP Basic Auth dialog, which is
 # ugly and has usability issues on iPad Safari. The page validates credentials via
-# fetch() to /auth-verify (which doesn't trigger the native dialog), then navigates
-# with embedded credentials so the browser caches them for the session.
+# fetch() to /auth-verify (which doesn't trigger the native dialog), then the server
+# sets a session cookie and the JS redirects to / without credentials in the URL.
+# Safari blocks user:pass@host URLs, so cookie-based sessions are required.
 RUN mkdir -p /usr/share/nginx/html && cat > /usr/share/nginx/html/login.html << 'LOGINPAGE'
 <!DOCTYPE html>
 <html lang="en">
@@ -160,18 +161,17 @@ document.getElementById('loginForm').addEventListener('submit', function(e) {
   // Validate credentials via fetch — fetch() never triggers the native auth dialog,
   // unlike XMLHttpRequest which can. /auth-verify uses nginx auth_basic and returns
   // a real 401 on failure (no error_page override on that endpoint).
+  // credentials: 'same-origin' so the browser accepts the Set-Cookie from the response.
   fetch('/auth-verify', {
     method: 'GET',
     headers: { 'Authorization': 'Basic ' + btoa(user + ':' + pass) },
-    credentials: 'omit'
+    credentials: 'same-origin'
   }).then(function(res) {
     if (res.ok) {
-      // Credentials valid. Navigate with embedded credentials so the browser
-      // sends them as a Basic Auth header and caches them for the session.
-      var loc = window.location;
-      window.location.href = loc.protocol + '//' +
-        encodeURIComponent(user) + ':' + encodeURIComponent(pass) +
-        '@' + loc.host + '/';
+      // Credentials valid. Server set a session cookie in the response.
+      // Redirect to / without credentials in the URL — Safari blocks
+      // user:pass@host URLs, so we rely on the cookie instead.
+      window.location.href = '/';
     } else {
       errEl.style.display = 'block';
       btnText.style.display = 'inline';
@@ -211,10 +211,18 @@ worker_processes 1;
 events { worker_connections 1024; }
 http {
     access_log /dev/stdout;
+
+    # Check session cookie — __SESSION_SECRET__ is replaced at container start
+    # with a SHA-256 hash derived from USERNAME:PASSWORD.
+    map $cookie_terminal_session $session_valid {
+        "__SESSION_SECRET__" 1;
+        default 0;
+    }
+
     server {
         listen __PORT__;
 
-        # Basic auth — credentials populated at runtime from USERNAME/PASSWORD env vars
+        # Basic auth — used ONLY for /auth-verify; other locations turn it off.
         auth_basic "Terminal";
         auth_basic_user_file /etc/nginx/.htpasswd;
 
@@ -228,17 +236,24 @@ http {
         # Has auth_basic (inherited from server) but NO error_page override,
         # so it returns a real 401 on failure. fetch() does not trigger the
         # native browser auth dialog, so this is safe.
+        # On success, sets a session cookie so subsequent requests use cookie auth
+        # instead of Basic Auth (Safari blocks user:pass@host URLs).
         location = /auth-verify {
+            add_header Set-Cookie "terminal_session=__SESSION_SECRET__; Path=/; HttpOnly; Secure; SameSite=Strict" always;
             default_type text/plain;
             return 200 'ok';
         }
 
-        # Main terminal proxy — intercepts 401 and shows our custom login page
-        # instead of the browser's native Basic Auth dialog.
-        # "=200" changes the response status so the browser never sees a 401 or
-        # the WWW-Authenticate header that would trigger the native dialog.
+        # Main terminal proxy — uses cookie auth instead of Basic Auth.
+        # If no valid session cookie, serve the login page (as a 200 so the
+        # browser never sees a 401 / WWW-Authenticate that would trigger
+        # the native Basic Auth dialog).
         location / {
-            error_page 401 =200 /login.html;
+            auth_basic off;
+
+            if ($session_valid != 1) {
+                rewrite ^ /login.html last;
+            }
 
             proxy_pass http://127.0.0.1:7681;
 
@@ -269,9 +284,10 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 # At container start:
 # 1. Append colored PS1 prompt to .bashrc
 # 2. Create the nginx basic-auth file from USERNAME / PASSWORD env vars
-# 3. Substitute __PORT__ in the nginx template and write to /etc/nginx/nginx.conf
-# 4. Start ttyd bound to loopback only on port 7681 (nginx is the public-facing server)
-# 5. Start nginx in the foreground — tini keeps PID 1 tidy
+# 3. Generate a session secret (SHA-256 of USERNAME:PASSWORD) for cookie auth
+# 4. Substitute __PORT__ and __SESSION_SECRET__ in the nginx template
+# 5. Start ttyd bound to loopback only on port 7681 (nginx is the public-facing server)
+# 6. Start nginx in the foreground — tini keeps PID 1 tidy
 #
 # ttyd client options (-t flags sent to the xterm.js frontend):
 #   disableLeaveAlert=true — stops Safari showing "Leave site?" on keyboard shortcuts
@@ -280,7 +296,8 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/bin/bash", "-lc", "\
     echo \"export PS1='\\[\\033[01;31m\\]$USERNAME@\\h\\[\\033[00m\\]:\\[\\033[01;33m\\]\\w\\[\\033[00m\\]\\$ '\" >> /root/.bashrc && \
     htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
-    sed \"s/__PORT__/${PORT:-8080}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
+    SESSION_SECRET=$(echo -n \"${USERNAME}:${PASSWORD}\" | sha256sum | cut -d' ' -f1) && \
+    sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
     cat /etc/nginx/nginx.conf && \
     /usr/local/bin/ttyd \
       --writable \
