@@ -197,6 +197,183 @@ document.getElementById('loginForm').addEventListener('submit', function(e) {
 </html>
 LOGINPAGE
 
+# Voice-enabled terminal page — wraps ttyd with a Web Speech API microphone overlay.
+# Navigate to /voice instead of / to get the voice-input terminal.
+# Uses xterm.js from CDN to replicate the ttyd frontend, then adds a floating mic
+# button that feeds recognised speech directly into the terminal via the ttyd WebSocket.
+RUN cat > /usr/share/nginx/html/voice.html << 'VOICEPAGE'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Voice Terminal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100vh; height: -webkit-fill-available; background: #000; overflow: hidden; }
+#terminal { width: 100%; height: 100%; }
+#mic-btn {
+  position: fixed; bottom: 24px; right: 24px;
+  width: 64px; height: 64px; border-radius: 50%; border: none;
+  background: #e94560; color: #fff; font-size: 28px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5); z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.2s, transform 0.1s;
+}
+#mic-btn.listening { background: #cc0000; animation: pulse 1s ease-in-out infinite; }
+#mic-btn:active { transform: scale(0.93); }
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(204,0,0,0.5); }
+  50%       { box-shadow: 0 4px 32px rgba(204,0,0,0.9); }
+}
+#status {
+  position: fixed; bottom: 96px; right: 16px;
+  background: rgba(0,0,0,0.75); color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px;
+  padding: 5px 12px; border-radius: 14px; z-index: 100;
+  max-width: 220px; text-align: right; display: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<div id="status"></div>
+<button id="mic-btn" title="Tap to speak">&#127908;</button>
+<script>
+(function () {
+  /* ── Terminal ── */
+  var term = new Terminal({
+    fontSize: 16,
+    cursorBlink: true,
+    theme: { background: '#000000', foreground: '#cccccc' },
+    convertEol: false
+  });
+  var fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById('terminal'));
+  fitAddon.fit();
+
+  var ro = new ResizeObserver(function () {
+    fitAddon.fit();
+    sendResize();
+  });
+  ro.observe(document.getElementById('terminal'));
+
+  /* ── WebSocket → ttyd ── */
+  var ws;
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var wsUrl = proto + '//' + location.host + '/ws';
+
+  function sendResize() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send('1' + JSON.stringify({ columns: term.cols, rows: term.rows }));
+    }
+  }
+
+  function connect() {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = function () { setTimeout(sendResize, 150); };
+    ws.onmessage = function (ev) {
+      if (typeof ev.data === 'string') {
+        if (ev.data[0] === '0') term.write(ev.data.slice(1));
+      } else {
+        var arr = new Uint8Array(ev.data);
+        if (arr[0] === 48 /* '0' */) term.write(arr.slice(1));
+      }
+    };
+    ws.onclose = function () {
+      term.write('\r\n\x1b[31m[Disconnected — reconnecting in 2 s…]\x1b[0m\r\n');
+      setTimeout(connect, 2000);
+    };
+    ws.onerror = function () { ws.close(); };
+  }
+  connect();
+
+  term.onData(function (data) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send('0' + data);
+  });
+
+  /* ── Voice input ── */
+  var micBtn  = document.getElementById('mic-btn');
+  var statusEl = document.getElementById('status');
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SR) {
+    micBtn.style.background = '#555';
+    micBtn.title = 'Speech recognition not supported in this browser';
+    micBtn.disabled = true;
+  } else {
+    var rec      = null;
+    var active   = false;
+
+    function showStatus(txt) {
+      statusEl.textContent = txt;
+      statusEl.style.display = 'block';
+    }
+    function hideStatus() {
+      setTimeout(function () { statusEl.style.display = 'none'; }, 2000);
+    }
+
+    function startRec() {
+      rec = new SR();
+      rec.lang             = 'en-US';
+      rec.interimResults   = true;
+      rec.maxAlternatives  = 1;
+      rec.continuous       = false;   /* iOS Safari works best with false */
+
+      rec.onstart = function () {
+        active = true;
+        micBtn.classList.add('listening');
+        micBtn.innerHTML = '&#9632;'; /* stop square */
+        showStatus('Listening…');
+      };
+
+      rec.onresult = function (e) {
+        var interim = '', final = '';
+        for (var i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) final  += e.results[i][0].transcript;
+          else                       interim += e.results[i][0].transcript;
+        }
+        if (interim) showStatus(interim);
+        if (final && ws && ws.readyState === WebSocket.OPEN) {
+          showStatus('\u2713 ' + final);
+          ws.send('0' + final + '\n');
+        }
+      };
+
+      rec.onerror = function (e) {
+        showStatus('Error: ' + e.error);
+        stopRec();
+      };
+
+      rec.onend = stopRec;
+      rec.start();
+    }
+
+    function stopRec() {
+      active = false;
+      micBtn.classList.remove('listening');
+      micBtn.innerHTML = '&#127908;';
+      hideStatus();
+      if (rec) { try { rec.abort(); } catch (_) {} rec = null; }
+    }
+
+    micBtn.addEventListener('click', function () {
+      if (active) stopRec(); else startRec();
+    });
+  }
+})();
+</script>
+</body>
+</html>
+VOICEPAGE
+
 # Write nginx config template — __PORT__ is replaced with $PORT at container start.
 # Single-quoted heredoc ('NGINXCONF') prevents the shell from expanding nginx
 # variables like $http_upgrade and $host at build time; nginx expands them at
@@ -249,6 +426,18 @@ http {
             add_header Set-Cookie "terminal_session=__SESSION_SECRET__; Path=/; HttpOnly; Secure; SameSite=Strict" always;
             default_type text/plain;
             return 200 'ok';
+        }
+
+        # Voice-enabled terminal page — same cookie auth as /, serves static HTML.
+        location = /voice {
+            auth_basic off;
+
+            if ($session_valid != 1) {
+                rewrite ^ /login.html last;
+            }
+
+            alias /usr/share/nginx/html/voice.html;
+            default_type text/html;
         }
 
         # Main terminal proxy — uses cookie auth instead of Basic Auth.
