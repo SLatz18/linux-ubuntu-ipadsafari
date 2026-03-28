@@ -302,7 +302,9 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 #   cursorBlink=true       — shows clearly when the terminal has focus
 CMD ["/bin/bash", "-lc", "\
     echo \"export PS1='\\[\\033[01;31m\\]$USERNAME@\\h\\[\\033[00m\\]:\\[\\033[01;33m\\]\\w\\[\\033[00m\\]\\$ '\" >> /root/.bashrc && \
-    ln -sf /workspace/.claude ~/.claude && \
+    mkdir -p /workspace/.claude && \
+    rm -rf ~/.claude && \
+    ln -s /workspace/.claude ~/.claude && \
     htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
     SESSION_SECRET=$(echo -n \"${USERNAME}:${PASSWORD}\" | sha256sum | cut -d' ' -f1) && \
     sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
