@@ -17,6 +17,14 @@ RUN apt-get update && \
     nginx apache2-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js 20.x LTS (required for Claude Code)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code globally
+RUN npm install -g @anthropic-ai/claude-code
+
 # Download ttyd binary — picks the correct one based on CPU architecture (x86 or ARM)
 RUN set -eux; \
     arch="$(uname -m)"; \
@@ -250,6 +258,13 @@ http {
             return 200 'ok';
         }
 
+        # Health check endpoint for Railway — no auth required
+        location = /healthz {
+            auth_basic off;
+            default_type text/plain;
+            return 200 'ok';
+        }
+
         # Main terminal proxy — uses cookie auth instead of Basic Auth.
         # If no valid session cookie, serve the login page (as a 200 so the
         # browser never sees a 401 / WWW-Authenticate that would trigger
@@ -307,6 +322,9 @@ CMD ["/bin/bash", "-lc", "\
     [ -s /workspace/.claude.json ] || echo '{}' > /workspace/.claude.json && \
     rm -f /root/.claude.json && \
     ln -s /workspace/.claude.json /root/.claude.json && \
+    [ -n \"${GITHUB_NAME}\" ] && git config --global user.name \"${GITHUB_NAME}\"; \
+    [ -n \"${GITHUB_EMAIL}\" ] && git config --global user.email \"${GITHUB_EMAIL}\"; \
+    [ -n \"${GH_TOKEN}\" ] && git config --global url.\"https://${GH_TOKEN}@github.com/\".insteadOf \"https://github.com/\"; \
     htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
     SESSION_SECRET=$(echo -n \"${USERNAME}:${PASSWORD}\" | sha256sum | cut -d' ' -f1) && \
     sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
