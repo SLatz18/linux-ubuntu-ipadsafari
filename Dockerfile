@@ -494,6 +494,9 @@ CMD ["/bin/bash", "-lc", "\
     mkdir -p /workspace/.claude && \
     rm -rf ~/.claude && \
     ln -s /workspace/.claude ~/.claude && \
+    touch /workspace/.claude.json && \
+    rm -f /root/.claude.json && \
+    ln -s /workspace/.claude.json /root/.claude.json && \
     htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
     SESSION_SECRET=$(echo -n \"${USERNAME}:${PASSWORD}\" | sha256sum | cut -d' ' -f1) && \
     sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
