@@ -211,6 +211,7 @@ worker_processes 1;
 events { worker_connections 1024; }
 http {
     access_log /dev/stdout;
+    map_hash_bucket_size 128;
 
     # Check session cookie — __SESSION_SECRET__ is replaced at container start
     # with a SHA-256 hash derived from USERNAME:PASSWORD.
