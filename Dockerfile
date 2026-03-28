@@ -293,7 +293,14 @@ body {
     ws.binaryType = 'arraybuffer';
     ws.onopen = function () {
       term.write('\x1b[32mConnected.\x1b[0m\r\n');
-      setTimeout(sendResize, 150);
+      setTimeout(function () {
+        sendResize();
+        /* After resize settles, send Ctrl-L so bash redraws the prompt
+           at the correct position in the newly-sized viewport */
+        setTimeout(function () {
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send('0\x0c');
+        }, 400);
+      }, 150);
     };
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string') {
@@ -364,12 +371,13 @@ body {
       };
 
       rec.onerror = function (e) {
-        /* 'network' is a transient iOS error — prompt user to retry rather than
-           showing a scary message */
-        var msg = e.error === 'network'
-          ? 'Tap again to retry'
-          : 'Error: ' + e.error;
-        showStatus(msg);
+        var msgs = {
+          'network':           'Tap again to retry',
+          'not-allowed':       'Mic blocked — check browser permissions',
+          'service-not-allowed':'Mic blocked — check browser permissions',
+          'no-speech':         'No speech detected — tap to retry'
+        };
+        showStatus(msgs[e.error] || 'Error: ' + e.error);
         stopRec();
       };
 
@@ -538,7 +546,7 @@ CMD ["/bin/bash", "-lc", "\
       -t disableLeaveAlert=true \
       -t fontSize=16 \
       -t cursorBlink=true \
-      tmux new-session -A -s main & \
+      tmux new-session -A -s main -x 220 -y 50 & \
     sleep 1 && \
     nginx -t && \
     nginx -g 'daemon off;'"]
