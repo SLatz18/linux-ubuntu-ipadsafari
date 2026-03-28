@@ -44,9 +44,12 @@ RUN echo "neofetch || true" >> /root/.bashrc && \
 # nginx here forces proxy_http_version 1.1 and sets the correct upgrade headers,
 # ensuring the WebSocket handshake succeeds on all browsers including Safari on iPad.
 RUN cat > /etc/nginx/ttyd-proxy.conf.template << 'NGINXCONF'
+pid /tmp/nginx.pid;
+error_log stderr;
 worker_processes 1;
 events { worker_connections 1024; }
 http {
+    access_log /dev/stdout;
     server {
         listen __PORT__;
 
@@ -94,8 +97,9 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 #   cursorBlink=true       — shows clearly when the terminal has focus
 CMD ["/bin/bash", "-lc", "\
     echo \"export PS1='\\[\\033[01;31m\\]$USERNAME@\\h\\[\\033[00m\\]:\\[\\033[01;33m\\]\\w\\[\\033[00m\\]\\$ '\" >> /root/.bashrc && \
-    htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" && \
-    sed \"s/__PORT__/${PORT}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
+    htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
+    sed \"s/__PORT__/${PORT:-8080}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
+    cat /etc/nginx/nginx.conf && \
     /usr/local/bin/ttyd \
       --writable \
       -i 127.0.0.1 \
@@ -104,4 +108,6 @@ CMD ["/bin/bash", "-lc", "\
       -t fontSize=16 \
       -t cursorBlink=true \
       /bin/bash -l & \
+    sleep 1 && \
+    nginx -t && \
     nginx -g 'daemon off;'"]
