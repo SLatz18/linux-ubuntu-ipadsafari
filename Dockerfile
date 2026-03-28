@@ -3,6 +3,10 @@ FROM ubuntu:22.04
 # Prevent apt from prompting during build
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Persist workspace local bin on PATH so installed tools (e.g. pipx, uv) are
+# available in every shell session without manually exporting PATH each time.
+ENV PATH="/workspace/.local/bin:$PATH"
+
 # Install base utilities + nginx (WebSocket proxy) + apache2-utils (htpasswd for basic auth)
 RUN apt-get update && \
     apt-get upgrade -y && \
