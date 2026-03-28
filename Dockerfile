@@ -17,6 +17,12 @@ RUN apt-get update && \
     nginx apache2-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Create a non-root user so the container never runs as root.
+# /workspace is pre-created and owned by this user so volume mounts inherit the right owner.
+RUN useradd -m -s /bin/bash terminal && \
+    mkdir -p /workspace && \
+    chown terminal:terminal /workspace
+
 # Download ttyd binary — picks the correct one based on CPU architecture (x86 or ARM)
 RUN set -eux; \
     arch="$(uname -m)"; \
@@ -30,11 +36,10 @@ RUN set -eux; \
     && chmod +x /usr/local/bin/ttyd
 
 # Run neofetch on every new terminal session to display system info
-# 'cd /root' ensures every session starts in the home directory
 # 'cc' alias drops into /workspace and launches claude in one keystroke
-RUN echo "neofetch || true" >> /root/.bashrc && \
-    echo "cd /root" >> /root/.bashrc && \
-    echo "alias cc='cd /workspace && claude'" >> /root/.bashrc
+RUN echo "neofetch || true" >> /home/terminal/.bashrc && \
+    echo "cd /home/terminal" >> /home/terminal/.bashrc && \
+    echo "alias cc='cd /workspace && claude'" >> /home/terminal/.bashrc
 
 # Custom login page — replaces the browser's native HTTP Basic Auth dialog, which is
 # ugly and has usability issues on iPad Safari. The page validates credentials via
@@ -408,7 +413,7 @@ http {
 
         # Basic auth — used ONLY for /auth-verify; other locations turn it off.
         auth_basic "Terminal";
-        auth_basic_user_file /etc/nginx/.htpasswd;
+        auth_basic_user_file /tmp/.htpasswd;
 
         # Login page — served without auth
         location = /login.html {
@@ -472,6 +477,9 @@ http {
 }
 NGINXCONF
 
+# Drop to non-root for all runtime processes.
+USER terminal
+
 # tini is used as the init process (PID 1) so that:
 # - zombie processes are properly reaped
 # - signals like SIGTERM are correctly forwarded on container shutdown
@@ -490,17 +498,17 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 #   fontSize=16            — readable without pinch-zooming on iPad
 #   cursorBlink=true       — shows clearly when the terminal has focus
 CMD ["/bin/bash", "-lc", "\
-    echo \"export PS1='\\[\\033[01;31m\\]$USERNAME@\\h\\[\\033[00m\\]:\\[\\033[01;33m\\]\\w\\[\\033[00m\\]\\$ '\" >> /root/.bashrc && \
+    echo \"export PS1='\\[\\033[01;31m\\]$USERNAME@\\h\\[\\033[00m\\]:\\[\\033[01;33m\\]\\w\\[\\033[00m\\]\\$ '\" >> /home/terminal/.bashrc && \
     mkdir -p /workspace/.claude && \
-    rm -rf ~/.claude && \
-    ln -s /workspace/.claude ~/.claude && \
+    rm -rf /home/terminal/.claude && \
+    ln -s /workspace/.claude /home/terminal/.claude && \
     touch /workspace/.claude.json && \
-    rm -f /root/.claude.json && \
-    ln -s /workspace/.claude.json /root/.claude.json && \
-    htpasswd -cb /etc/nginx/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
+    rm -f /home/terminal/.claude.json && \
+    ln -s /workspace/.claude.json /home/terminal/.claude.json && \
+    htpasswd -cb /tmp/.htpasswd \"${USERNAME}\" \"${PASSWORD}\" 2>&1 && \
     SESSION_SECRET=$(echo -n \"${USERNAME}:${PASSWORD}\" | sha256sum | cut -d' ' -f1) && \
-    sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /etc/nginx/nginx.conf && \
-    cat /etc/nginx/nginx.conf && \
+    sed -e \"s/__PORT__/${PORT:-8080}/g\" -e \"s/__SESSION_SECRET__/${SESSION_SECRET}/g\" /etc/nginx/ttyd-proxy.conf.template > /tmp/nginx.conf && \
+    cat /tmp/nginx.conf && \
     /usr/local/bin/ttyd \
       --writable \
       -i 127.0.0.1 \
@@ -510,5 +518,5 @@ CMD ["/bin/bash", "-lc", "\
       -t cursorBlink=true \
       /bin/bash -l & \
     sleep 1 && \
-    nginx -t && \
-    nginx -g 'daemon off;'"]
+    nginx -c /tmp/nginx.conf -t && \
+    nginx -c /tmp/nginx.conf -g 'daemon off;'"]
